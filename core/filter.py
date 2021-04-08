@@ -1,7 +1,13 @@
 import numpy as np
 
-from cv.smooth import box_filter
-from cv.image import to_32F
+from cv2 import boxFilter
+
+
+def to_32F(m):
+    return m.astype(np.float32)
+
+def box_filter(I, r):
+    return boxFilter(I, ddepth=-1, ksize=(r*2+1, r*2+1))
 
 
 class GuidedFilter:
@@ -172,5 +178,131 @@ class MultiDimGuidedFilter:
 
         q = np.matmul(meana, I_) + meanb
         q = q.reshape((self.rows, self.cols))
+
+        return q
+
+def masked_box_filter(image, mask, radius):
+    image[mask <= 0] = 0
+    filtered_image = box_filter(image, radius)
+    filtered_mask = box_filter(mask, radius)
+    filtered_image[filtered_mask > 0] /= filtered_mask[filtered_mask > 0]
+    filtered_image[filtered_mask <= 0] = 0
+    return filtered_image
+
+class MultiDimGuidedFilterMasked:
+    """
+    Specific guided filter for color guided image
+    or multi-dimensional feature map.
+    """
+    def __init__(self, I, radius, eps):
+        self.I = to_32F(I)
+        self.radius = radius
+        self.eps = eps
+
+        self.rows = self.I.shape[0]
+        self.cols = self.I.shape[1]
+        self.chs  = self.I.shape[2]
+
+    def filter(self, mask, p):
+        """
+
+        Parameters
+        ----------
+        p: NDArray
+            Filtering input of 2D
+
+        Returns
+        -------
+        q: NDArray
+            Filtering output of 2D
+        """
+        p_ = np.expand_dims(p, axis=2)
+
+        meanI = masked_box_filter(self.I, mask, self.radius) # (H, W, C)
+        meanp = masked_box_filter(p_, mask, self.radius)[:,:,None] # (H, W, 1)
+        I_ = self.I.reshape((self.rows*self.cols, self.chs, 1)) # (HW, C, 1)
+        meanI_ = meanI.reshape((self.rows*self.cols, self.chs, 1)) # (HW, C, 1)
+
+        corrI_ = np.matmul(I_, I_.transpose(0, 2, 1))  # (HW, C, C)
+        corrI_ = corrI_.reshape((self.rows, self.cols, self.chs*self.chs)) # (H, W, CC)
+        corrI_ = masked_box_filter(corrI_, mask, self.radius)
+        corrI = corrI_.reshape((self.rows*self.cols, self.chs, self.chs)) # (HW, C, C)
+
+        U = np.expand_dims(np.eye(self.chs, dtype=np.float32), axis=0)
+        # U = np.tile(U, (self.rows*self.cols, 1, 1)) # (HW, C, C)
+
+        left = np.linalg.inv(corrI + self.eps * U) # (HW, C, C)
+
+        corrIp = masked_box_filter(self.I*p_, mask, self.radius) # (H, W, C)
+        covIp = corrIp - meanI * meanp # (H, W, C)
+        right = covIp.reshape((self.rows*self.cols, self.chs, 1)) # (HW, C, 1)
+
+        a = np.matmul(left, right) # (HW, C, 1)
+        axmeanI = np.matmul(a.transpose((0, 2, 1)), meanI_) # (HW, 1, 1)
+        axmeanI = axmeanI.reshape((self.rows, self.cols, 1))
+        b = meanp - axmeanI # (H, W, 1)
+        a = a.reshape((self.rows, self.cols, self.chs))
+
+        meana = masked_box_filter(a, mask, self.radius)
+        meanb = masked_box_filter(b, mask, self.radius)
+
+        meana = meana.reshape((self.rows*self.cols, 1, self.chs))
+        meanb = meanb.reshape((self.rows*self.cols, 1, 1))
+        I_ = self.I.reshape((self.rows*self.cols, self.chs, 1))
+
+        q = np.matmul(meana, I_) + meanb
+        q = q.reshape((self.rows, self.cols))
+
+        return q
+
+class GrayGuidedFilterMasked:
+    """
+    Specific guided filter for gray guided image.
+    """
+    def __init__(self, I, radius, eps):
+        """
+
+        Parameters
+        ----------
+        I: NDArray
+            2D guided image
+        radius: int
+            Radius of filter
+        eps: float
+            Value controlling sharpness
+        """
+        self.I = to_32F(I)
+        self.radius = radius
+        self.eps = eps
+
+    def filter(self, mask, p):
+        """
+
+        Parameters
+        ----------
+        p: NDArray
+            Filtering input of 2D
+
+        Returns
+        -------
+        q: NDArray
+            Filtering output of 2D
+        """
+        # step 1
+        meanI  = masked_box_filter(self.I, mask, self.radius)
+        meanp  = masked_box_filter(p, mask, self.radius)
+        corrI  = masked_box_filter(self.I * self.I, mask, self.radius)
+        corrIp = masked_box_filter(self.I * p, mask, self.radius)
+        # step 2
+        varI   = corrI - meanI * meanI
+        covIp  = corrIp - meanI * meanp
+        # step 3
+        a      = covIp / (varI + self.eps)
+        b      = meanp - a * meanI
+        # step 4
+        meana  = masked_box_filter(a, mask, self.radius)
+        meanb  = masked_box_filter(b, mask, self.radius)
+        # step 5
+        q = meana * self.I + meanb
 
         return q
