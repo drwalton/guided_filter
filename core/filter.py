@@ -289,9 +289,9 @@ class GrayGuidedFilterMasked:
             Filtering output of 2D
         """
         # step 1
-        meanI  = masked_box_filter(self.I, mask, self.radius)
+        meanI  = box_filter(self.I, self.radius)
         meanp  = masked_box_filter(p, mask, self.radius)
-        corrI  = masked_box_filter(self.I * self.I, mask, self.radius)
+        corrI  = box_filter(self.I * self.I, self.radius)
         corrIp = masked_box_filter(self.I * p, mask, self.radius)
         # step 2
         varI   = corrI - meanI * meanI
